@@ -14,6 +14,7 @@
   .panel .sub{color:#888;font-size:11px}
   .panel label{display:flex;align-items:center;gap:6px;cursor:pointer}
   .panel hr{border:0;border-top:1px solid #e5e5e5;margin:8px 0}
+  .panel select{font-size:12px;padding:2px 4px;border-radius:4px;border:1px solid #ccc;background:#fff}
   #hint{position:absolute;bottom:12px;left:12px;z-index:1000;background:rgba(255,255,255,.9);
         border-radius:8px;padding:6px 10px;font-size:12px;color:#555}
   .sheetlabel{background:rgba(255,255,255,.8);border:1px solid rgba(0,0,0,.2);border-radius:3px;
@@ -31,6 +32,13 @@
   <div class="sub">中研院 RCHSS 典藏 · 廣東陸地測量局 · 101 幅<br>XYZ 瓦片 · EPSG:3857 · z5–15</div>
   <hr>
 
+  <label>底图 <select id="base">
+    <option value="none">无（深色）</option>
+    <option value="tdt_vec">天地图 · 矢量</option>
+    <option value="tdt_img">天地图 · 影像</option>
+    <option value="tdt_ter">天地图 · 地形</option>
+    <option value="osm">OpenStreetMap</option>
+  </select></label>
   <label><input type="checkbox" id="lyG" checked>图幅接合表（图名 + 图号）</label>
   <label>透明度 <input type="range" id="opa" min="30" max="100" value="100" style="width:110px;vertical-align:middle"></label>
   <div class="sub" id="tip">放大到 z10 以上显示图名与图号；点格子看三套编号</div>
@@ -39,17 +47,57 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+/* ===== 天地图 key：到 https://console.tianditu.gov.cn 免费申请后填这里 ===== */
+const TDT_KEY = '4267820f43926eaf808d61dc07269beb';
+
 const qs = new URLSearchParams(location.search);
 const map = L.map('map', {
   center: [parseFloat(qs.get('lat') || 19.2), parseFloat(qs.get('lon') || 109.7)],
   zoom: parseInt(qs.get('z') || 8)
 });
+map.createPane('basemapPane');
+map.getPane('basemapPane').style.zIndex = 150;   // 低于 tilePane(200)，历史地图始终压在上面
+
+/* ---------- 底图 ---------- */
+function tdt(layer, key, maxZoom) {
+  return L.tileLayer(
+    'https://t{s}.tianditu.gov.cn/' + key + '/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0' +
+    '&LAYER=' + layer + '&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles' +
+    '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=' + TDT_KEY,
+    {subdomains: '01234567', maxZoom: maxZoom || 18, pane: 'basemapPane', attribution: '© 天地图'});
+}
+const BASEMAPS = {
+  none: null,
+  tdt_vec: () => L.layerGroup([tdt('vec', 'vec_w'), tdt('cva', 'cva_w')]),
+  tdt_img: () => L.layerGroup([tdt('img', 'img_w'), tdt('cia', 'cia_w')]),
+  tdt_ter: () => L.layerGroup([tdt('ter', 'ter_w'), tdt('cta', 'cta_w')]),
+  osm: () => L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+           {maxZoom: 19, pane: 'basemapPane', attribution: '© OpenStreetMap contributors'})
+};
+
+let baseLayer = null;
+function setBase(kind) {
+  if (baseLayer) { map.removeLayer(baseLayer); baseLayer = null; }
+  if (kind === 'none') return;
+  if (kind.startsWith('tdt') && !TDT_KEY) {
+    document.getElementById('tip').textContent = '没填天地图 key，已临时用 OSM；申请后填 index.html 里的 TDT_KEY';
+    kind = 'osm';
+    document.getElementById('base').value = 'osm';
+  }
+  baseLayer = BASEMAPS[kind]();
+  if (baseLayer) { baseLayer.addTo(map); }
+  document.getElementById('base').value = kind;
+}
+document.getElementById('base').onchange = e => setBase(e.target.value);
+setBase(qs.get('base') || 'none');
+
+/* ---------- 瓦片 ---------- */
 const tiles = L.tileLayer('xyz_C_webp/{z}/{x}/{y}.webp', {
   minZoom: 5, maxZoom: 15, maxNativeZoom: 15, attribution: '海南島五萬分一 · RCHSS'
 }).addTo(map);
 document.getElementById('opa').oninput = e => tiles.setOpacity(e.target.value / 100);
 
-/* 接合表：每格常显「图名 / 图号」，z10 以上才显示 */
+/* ---------- 图幅接合表 ---------- */
 const LABEL_MIN_ZOOM = 10;
 let grid = null;
 
