@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   html,body{margin:0;height:100%;font-family:"Microsoft YaHei",system-ui,sans-serif}
-  #map{position:absolute;inset:0;background:#2b2f36}
+  #map{position:absolute;inset:0;background:#22262c}
   .panel{position:absolute;top:12px;left:12px;z-index:1000;background:rgba(255,255,255,.95);
          border-radius:10px;padding:10px 12px;box-shadow:0 2px 12px rgba(0,0,0,.25);font-size:13px;line-height:1.7}
   .panel h1{margin:0 0 4px;font-size:15px;font-weight:700}
@@ -16,25 +16,35 @@
   .panel hr{border:0;border-top:1px solid #e5e5e5;margin:8px 0}
   #hint{position:absolute;bottom:12px;left:12px;z-index:1000;background:rgba(255,255,255,.9);
         border-radius:8px;padding:6px 10px;font-size:12px;color:#555}
+  /* 图幅标注 */
+  .sheetlabel{background:rgba(255,255,255,.78);border:1px solid rgba(0,0,0,.18);border-radius:3px;
+              padding:1px 4px;color:#1a1a1a;text-align:center;white-space:nowrap;
+              box-shadow:0 1px 2px rgba(0,0,0,.15);font-size:11px;line-height:1.25}
+  .sheetlabel .nm{font-weight:700;font-size:11px}
+  .sheetlabel .no{color:#a3541f;font-size:10px;letter-spacing:.2px}
+  .sheetlabel.partial{border-color:#d08a1e;border-style:dashed}
 </style>
 </head>
 <body>
 <div id="map"></div>
 <div class="panel">
-  <h1>海南島 五萬分一</h1>
-  <div class="sub">中研院 RCHSS 典藏 · 廣東陸地測量局 · 101 幅<br>XYZ 瓦片 · EPSG:3857 · z5–15 · 原生精度</div>
+  <h1>海南島 五萬分一 · 中研院 RCHSS</h1>
+  <div class="sub">中研院 RCHSS 典藏 · 廣東陸地測量局 · 101 幅<br>XYZ 瓦片 · EPSG:3857 · z5–15</div>
   <hr>
-  <label><input type="checkbox" id="lyG">图幅接合表（点格看图名）</label>
+  <label><input type="checkbox" id="lyG" checked>图幅接合表（图名 + 图号）</label>
   <label>透明度 <input type="range" id="opa" min="30" max="100" value="100" style="width:110px;vertical-align:middle"></label>
-  <div class="sub" id="tip"></div>
+  <div class="sub" id="tip">放大到 z10 以上显示图名与图号；点格子看三套编号</div>
 </div>
 <div id="hint">滚轮缩放 · 拖动平移</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const map = L.map('map', {center:[19.2,109.7], zoom:8});
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-  {maxZoom:18, attribution:'底图 © CARTO'}).addTo(map);
+/* 起始视野：支持 ?z=11&lat=19.2&lon=109.7 直接定位 */
+const qs = new URLSearchParams(location.search);
+const map = L.map('map', {
+  center: [parseFloat(qs.get('lat') || 19.2), parseFloat(qs.get('lon') || 109.7)],
+  zoom: parseInt(qs.get('z') || 8)
+});
 
 const tiles = L.tileLayer('xyz_C_webp/{z}/{x}/{y}.webp', {
   minZoom:5, maxZoom:15, maxNativeZoom:15, attribution:'海南島五萬分一 · RCHSS'
@@ -42,18 +52,50 @@ const tiles = L.tileLayer('xyz_C_webp/{z}/{x}/{y}.webp', {
 
 document.getElementById('opa').oninput = e => tiles.setOpacity(e.target.value/100);
 
+/* 图幅标注：每格常显「图名 / 图号」，缩放到 z10 以上才出现（低了会糊成一片） */
+const LABEL_MIN_ZOOM = 10;
 let grid = null;
-fetch('sheets_index.geojson').then(r=>r.json()).then(gj=>{
+
+function numOf(p) {          // 优先本套图号
+  return p.c;
+}
+function nosOf(p) {          // 悬停显示全部编号
+  const out = [];
+  if (p.a) out.push('A ' + p.a);
+  if (p.b) out.push('B ' + p.b);
+  if (p.c) out.push('C ' + p.c);
+  return out.join(' · ');
+}
+
+fetch('sheets_index.geojson').then(r => r.json()).then(gj => {
   grid = L.geoJSON(gj, {
-    style: f => ({color:'#e0a020', weight:1, fill:false,
-                  opacity: f.properties.s==='ABC'?0.55:0.95,
-                  dashArray: f.properties.s==='ABC'?null:'4 3'}),
-    onEachFeature: (f,ly)=> ly.on('click', ()=>{
-      document.getElementById('tip').textContent = f.properties.n + '（' + f.properties.s + '）';
-    })
+    style: f => ({color: '#e0a020', weight: 1, fill: false, opacity: .75}),
+    onEachFeature: (f, ly) => {
+      const p = f.properties;
+      const html = '<span class="nm">' + p.n + '</span><br><span class="no">' + numOf(p) + '</span>';
+      ly.bindTooltip(html, {
+        permanent: true, direction: 'center', className: 'sheetlabel' + (p.s === 'ABC' ? '' : ' partial'),
+        opacity: 1
+      });
+      ly.bindPopup('<b>' + p.n + '</b><br>' + (nosOf(p) || '（无编号）') +
+                  '<br><span style="color:#888">行' + p['行'] + ' 列' + p['列'] + '</span>');
+    }
   });
-  document.getElementById('lyG').onchange = e => e.target.checked ? grid.addTo(map) : map.removeLayer(grid);
-}).catch(()=>{ document.getElementById('tip').textContent = '接合表未随包上传'; });
+  if (map.getZoom() >= LABEL_MIN_ZOOM) grid.addTo(map);
+});
+
+map.on('zoomend', () => {
+  if (!grid) return;
+  const on = document.getElementById('lyG').checked;
+  const want = on && map.getZoom() >= LABEL_MIN_ZOOM;
+  if (want && !map.hasLayer(grid)) grid.addTo(map);
+  if (!want && map.hasLayer(grid)) map.removeLayer(grid);
+});
+document.getElementById('lyG').onchange = () => {
+  if (!grid) return;
+  const want = document.getElementById('lyG').checked && map.getZoom() >= LABEL_MIN_ZOOM;
+  if (want) grid.addTo(map); else map.removeLayer(grid);
+};
 
 map.on('mousemove', ev => {
   const p = ev.latlng;
